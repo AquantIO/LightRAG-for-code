@@ -31,12 +31,77 @@ from .base import (
 )
 from .prompt import GRAPH_FIELD_SEP, PROMPTS
 import time
+import ast
+import traceback
 
+def chunk_python_code(code):
+    try:
+        # Step 1: Split the code string into lines
+        code_lines = code.splitlines()  # Create a list of lines from the input string
+        chunk_index = 0
+
+        # Step 2: Parse the code into an AST
+        tree = ast.parse(code)
+
+        # Step 3: Extract function and class definitions
+        chunks = []
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                # Ensure the node has `end_lineno` (Python 3.8+)
+                if not hasattr(node, "end_lineno"):
+                    raise AttributeError("Node does not have `end_lineno`. Ensure Python 3.8+ is used.")
+
+                # Extract the chunk for this function or class
+                chunks.append({
+                    "index": chunk_index,
+                    "type": "function" if isinstance(node, ast.FunctionDef) else "class",
+                    "name": node.name,
+                    "start_line": node.lineno,
+                    "end_line": node.end_lineno,
+                    "content": "\n".join(code_lines[node.lineno - 1 : node.end_lineno]),
+                })
+                chunk_index += 1
+            else:
+                print("other type of code")
+                chunks.insert(0, {
+                    "index": chunk_index,
+                    "type": "other",
+                    "name": "other_code",
+                    "start_line": node.lineno,
+                    "end_line": node.end_lineno,
+                    "content": "\n".join(code_lines[node.lineno - 1: node.end_lineno]),
+                })
+                chunk_index += 1
+
+        # Step 4: Handle top-level code (if any)
+        top_level_code = [
+            line for line in tree.body
+            if not isinstance(line, (ast.FunctionDef, ast.ClassDef))
+        ]
+        if top_level_code:
+            start_line = min(node.lineno for node in top_level_code)
+            end_line = max(getattr(node, "end_lineno", node.lineno) for node in top_level_code)
+            chunks.insert(0, {
+                "index": chunk_index,
+                "type": "top-level",
+                "name": "top_level_code",
+                "start_line": start_line,
+                "end_line": end_line,
+                "content": "\n".join(code_lines[start_line - 1 : end_line]),
+            })
+            chunk_index += 1
+        return chunks
+
+    except Exception as e:
+        print(f"Error during chunking: {e}")
+        traceback.print_exc()
+        return []
 
 def chunking_by_token_size(
     content: str,
     split_by_character=None,
     split_by_character_only=False,
+    split_by_code = True,
     overlap_token_size=128,
     max_token_size=1024,
     tiktoken_model="gpt-4o",
@@ -73,8 +138,60 @@ def chunking_by_token_size(
                     "tokens": _len,
                     "content": chunk.strip(),
                     "chunk_order_index": index,
+                    "start_line": chunk["start_line"],
+                    "end_line": chunk["end_line"],
                 }
             )
+    elif split_by_code:
+        raw_chunks = chunk_python_code(content)
+        new_chunks = []
+
+        for chunk_dict in raw_chunks:
+            chunk = chunk_dict["content"]
+            _tokens = encode_string_by_tiktoken(chunk, model_name=tiktoken_model)
+            if len(_tokens) > max_token_size:
+                for start in range(
+                    0, len(_tokens), max_token_size - overlap_token_size
+                ):
+                    chunk_content = decode_tokens_by_tiktoken(
+                        _tokens[start : start + max_token_size],
+                        model_name=tiktoken_model,
+                    )
+                    new_chunks.append(
+                        (min(max_token_size, len(_tokens) - start), chunk_content, chunk_dict["start_line"], chunk_dict["end_line"])
+                    )
+            else:
+                new_chunks.append((len(_tokens), chunk, chunk_dict["start_line"], chunk_dict["end_line"]))
+        for index, (_len, chunk, start_line, end_line) in enumerate(new_chunks):
+            results.append(
+                {
+                    "tokens": _len,
+                    "content": chunk.strip(),
+                    "chunk_order_index": index,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                }
+            )
+        ###
+        ###
+        ###
+        for raw_chunks in chunk_python_code(content):
+            raw_chunk = raw_chunks["content"]
+            index = raw_chunks["index"]
+            _tokens = encode_string_by_tiktoken(chunk, model_name=tiktoken_model)
+            chunk_content = decode_tokens_by_tiktoken(_tokens, model_name=tiktoken_model
+            )
+            results.append(
+                {
+                    "tokens": 5,#min(max_token_size, len(tokens) - start),
+                    "content": chunk_content.strip(),
+                    "chunk_order_index": index,
+                    "start_line": raw_chunks["start_line"],
+                    "end_line": raw_chunks["end_line"],
+                    
+                }
+            )
+            
     else:
         for index, start in enumerate(
             range(0, len(tokens), max_token_size - overlap_token_size)
@@ -1411,7 +1528,7 @@ async def naive_query(
     cached_response, quantized, min_val, max_val = await handle_cache(
         hashing_kv, args_hash, query, query_param.mode
     )
-    if cached_response is not None:
+    if False and cached_response is not None:
         return cached_response
 
     results = await chunks_vdb.query(query, top_k=query_param.top_k)
@@ -1439,6 +1556,9 @@ async def naive_query(
     if not maybe_trun_chunks:
         logger.warning("No chunks left after truncation")
         return PROMPTS["fail_response"]
+
+    #get file name for each chunk
+    
 
     logger.info(f"Truncate {len(chunks)} to {len(maybe_trun_chunks)} chunks")
     section = "\n--New Chunk--\n".join([c["content"] for c in maybe_trun_chunks])

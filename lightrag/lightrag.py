@@ -321,15 +321,15 @@ class LightRAG:
             storage.db = db_client
 
     def insert(
-        self, string_or_strings, split_by_character=None, split_by_character_only=False
+        self, string_or_strings,  file_path, file_name, split_by_character=None, split_by_character_only=False
     ):
         loop = always_get_an_event_loop()
         return loop.run_until_complete(
-            self.ainsert(string_or_strings, split_by_character, split_by_character_only)
+            self.ainsert(string_or_strings,  file_path, file_name, split_by_character, split_by_character_only)
         )
 
     async def ainsert(
-        self, string_or_strings, split_by_character=None, split_by_character_only=False
+        self, string_or_strings,  file_path, file_name, split_by_character=None, split_by_character_only=False
     ):
         """Insert documents with checkpoint support
 
@@ -355,6 +355,8 @@ class LightRAG:
                 "status": DocStatus.PENDING,
                 "created_at": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat(),
+                "file_name": file_name,
+                "file_path": file_path,
             }
             for content in unique_contents
         }
@@ -385,6 +387,8 @@ class LightRAG:
                         "status": DocStatus.PROCESSING,
                         "created_at": doc["created_at"],
                         "updated_at": datetime.now().isoformat(),
+                        "file_name": file_name,
+                        "file_path": file_path,
                     }
                     await self.doc_status.upsert({doc_id: doc_status})
 
@@ -393,6 +397,8 @@ class LightRAG:
                         compute_mdhash_id(dp["content"], prefix="chunk-"): {
                             **dp,
                             "full_doc_id": doc_id,
+                            "line_number_start": dp.get("line_number", 0),
+                            "line_number_end": dp.get("line_number", 0),
                         }
                         for dp in self.chunking_func(
                             doc["content"],
@@ -625,6 +631,7 @@ class LightRAG:
                         compute_mdhash_id(dp["content"], prefix="chunk-"): {
                             **dp,
                             "full_doc_id": doc_id,
+                            "doc_filepath": "test filepath",
                             "status": DocStatus.PENDING,
                         }
                         for dp in chunking_by_token_size(
