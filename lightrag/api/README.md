@@ -94,7 +94,6 @@ For example, chat message "/mix 唐僧有几个徒弟" will trigger a mix mode q
 
 After starting the lightrag-server, you can add an Ollama-type connection in the Open WebUI admin pannel. And then a model named lightrag:latest will appear in Open WebUI's model management interface. Users can then send queries to LightRAG through the chat interface.
 
-
 ## Configuration
 
 LightRAG can be configured using either command-line arguments or environment variables. When both are provided, command-line arguments take precedence over environment variables.
